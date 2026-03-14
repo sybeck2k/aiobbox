@@ -1,0 +1,35 @@
+[Unit]
+Description=Bbox router polling service
+Documentation=https://github.com/sweenu/aiobbox
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Run as a dedicated unprivileged user (create with: useradd -r -s /usr/sbin/nologin bbox)
+User=bbox
+Group=bbox
+
+# Path to the compiled binary
+ExecStart=/usr/local/bin/bbox
+
+# Required: router admin password
+EnvironmentFile=/etc/bbox/bbox.env
+
+# Optional overrides (can also go in bbox.env):
+# Environment=BBOX_URL=https://mabbox.bytel.fr/api/v1/
+# Environment=BBOX_INTERVAL=30
+# Environment=RUST_LOG=bbox=info
+
+# Restart policy
+Restart=on-failure
+RestartSec=10s
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
