@@ -230,7 +230,15 @@ impl BboxApi {
     /// Retrieve the list of connected hosts/devices (`GET /hosts`).
     pub async fn get_hosts(&mut self) -> Result<Vec<Host>> {
         debug!("Fetching hosts list");
-        let data = self.request("hosts").await?;
+        let mut data = self.request("hosts").await?;
+        // The API may return a multi-element array that request() does not
+        // auto-unwrap (it only unwraps single-element arrays). Mirror the
+        // Python client's fallback: if data is still an array, take [0].
+        if let serde_json::Value::Array(ref arr) = data.clone() {
+            if let Some(first) = arr.first() {
+                data = first.clone();
+            }
+        }
         let list = data["hosts"]["list"].clone();
         serde_json::from_value(list).map_err(BboxError::Json)
     }

@@ -1,5 +1,5 @@
 use chrono::{DateTime, FixedOffset};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 // ---------------------------------------------------------------------------
@@ -10,6 +10,17 @@ mod de {
     use chrono::{DateTime, FixedOffset};
     use serde::{Deserialize, Deserializer};
     use serde_json::Value;
+
+    /// Deserialize a `Vec<T>` treating both absent fields and explicit JSON
+    /// `null` as an empty vector. Use together with `#[serde(default)]` to
+    /// cover the absent case and with this deserializer to cover the null case.
+    pub fn vec_null_as_empty<'de, T, D>(d: D) -> Result<Vec<T>, D::Error>
+    where
+        T: Deserialize<'de>,
+        D: Deserializer<'de>,
+    {
+        Option::<Vec<T>>::deserialize(d).map(Option::unwrap_or_default)
+    }
 
     /// Re-encode a string from Latin-1 bytes interpreted as UTF-8, fixing
     /// mojibake that the router API sometimes produces.
@@ -44,27 +55,82 @@ mod de {
     pub fn opt_string_empty_as_none<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<Option<String>, D::Error> {
-        let opt = Option::<String>::deserialize(d)?;
-        Ok(opt
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty()))
+        Ok(match Value::deserialize(d)? {
+            Value::Null => None,
+            Value::String(s) => {
+                let s = s.trim().to_owned();
+                if s.is_empty() { None } else { Some(s) }
+            }
+            Value::Number(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(b.to_string()),
+            other => return Err(serde::de::Error::custom(format!(
+                "expected string or null, got {other:?}"
+            ))),
+        })
     }
 
     /// Deserialize a string, fix mojibake, and convert empty strings to `None`.
     pub fn opt_clean_string_empty_as_none<'de, D: Deserializer<'de>>(
         d: D,
     ) -> Result<Option<String>, D::Error> {
-        let opt = Option::<String>::deserialize(d)?;
-        Ok(opt
-            .map(|s| s.trim().to_owned())
-            .filter(|s| !s.is_empty())
-            .map(|s| fix_mojibake(&s)))
+        Ok(match Value::deserialize(d)? {
+            Value::Null => None,
+            Value::String(s) => {
+                let s = s.trim().to_owned();
+                if s.is_empty() { None } else { Some(fix_mojibake(&s)) }
+            }
+            Value::Number(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(b.to_string()),
+            other => return Err(serde::de::Error::custom(format!(
+                "expected string or null, got {other:?}"
+            ))),
+        })
     }
 
-    /// Deserialize a string and apply the mojibake fix.
+    /// Deserialize a string and apply the mojibake fix. Accepts JSON numbers
+    /// and booleans by converting them to their string representation.
     pub fn clean_string<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-        let s = String::deserialize(d)?;
-        Ok(fix_mojibake(s.trim()))
+        Ok(match Value::deserialize(d)? {
+            Value::String(s) => fix_mojibake(s.trim()),
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            other => return Err(serde::de::Error::custom(format!(
+                "expected string, got {other:?}"
+            ))),
+        })
+    }
+
+    /// Deserialize a plain string, accepting JSON numbers/booleans by converting
+    /// them to their string representation (mirrors Pydantic's lax coercion).
+    pub fn string_from_any<'de, D: Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+        Ok(match Value::deserialize(d)? {
+            Value::String(s) => s,
+            Value::Number(n) => n.to_string(),
+            Value::Bool(b) => b.to_string(),
+            Value::Null => String::new(),
+            other => return Err(serde::de::Error::custom(format!(
+                "expected a string-like value, got {other:?}"
+            ))),
+        })
+    }
+
+    /// Deserialize an optional string that accepts numbers/booleans and treats
+    /// empty/null as `None`.
+    pub fn opt_string_from_any<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<String>, D::Error> {
+        Ok(match Value::deserialize(d)? {
+            Value::Null => None,
+            Value::String(s) => {
+                let s = s.trim().to_owned();
+                if s.is_empty() { None } else { Some(s) }
+            }
+            Value::Number(n) => Some(n.to_string()),
+            Value::Bool(b) => Some(b.to_string()),
+            other => return Err(serde::de::Error::custom(format!(
+                "expected a string-like value, got {other:?}"
+            ))),
+        })
     }
 
     /// Deserialize an f64 that may come as a JSON number or a numeric string
@@ -104,8 +170,7 @@ mod de {
         }
     }
 
-    /// Deserialize an i64 from a JSON integer or numeric string (e.g., `rssi0`
-    /// which can be `0` or `"-52"`).
+    /// Deserialize an i64 from a JSON integer or numeric string.
     pub fn i64_from_str_or_num<'de, D: Deserializer<'de>>(d: D) -> Result<i64, D::Error> {
         match Value::deserialize(d)? {
             Value::String(s) => s
@@ -116,7 +181,23 @@ mod de {
                 .as_i64()
                 .ok_or_else(|| serde::de::Error::custom("invalid number for i64")),
             other => Err(serde::de::Error::custom(format!(
-                "expected integer or string for rssi, got {other:?}"
+                "expected integer or string, got {other:?}"
+            ))),
+        }
+    }
+
+    /// Deserialize a u64 from a JSON integer or numeric string.
+    pub fn u64_from_str_or_num<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        match Value::deserialize(d)? {
+            Value::String(s) => s
+                .trim()
+                .parse::<u64>()
+                .map_err(serde::de::Error::custom),
+            Value::Number(n) => n
+                .as_u64()
+                .ok_or_else(|| serde::de::Error::custom("invalid number for u64")),
+            other => Err(serde::de::Error::custom(format!(
+                "expected unsigned integer or string, got {other:?}"
             ))),
         }
     }
@@ -161,14 +242,17 @@ mod de {
 // /device
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RouterDisplay {
-    pub luminosity: u32,
-    pub luminosity_extender: u32,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
+    pub luminosity: u64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
+    pub luminosity_extender: u64,
+    #[serde(deserialize_with = "de::string_from_any")]
     pub state: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RouterVersion {
     #[serde(default, deserialize_with = "de::opt_string_empty_as_none")]
     pub version: Option<String>,
@@ -176,7 +260,7 @@ pub struct RouterVersion {
     pub date: Option<DateTime<FixedOffset>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct RouterUsing {
     #[serde(deserialize_with = "de::bool_from_int_or_bool")]
     pub ipv4: bool,
@@ -190,11 +274,13 @@ pub struct RouterUsing {
     pub vdsl: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Router {
     #[serde(deserialize_with = "de::datetime")]
     pub now: DateTime<FixedOffset>,
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub status: i64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub numberofboots: u64,
     #[serde(deserialize_with = "de::clean_string")]
     pub modelname: String,
@@ -214,8 +300,9 @@ pub struct Router {
     pub ldr2: RouterVersion,
     #[serde(deserialize_with = "de::datetime")]
     pub firstusedate: DateTime<FixedOffset>,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub uptime: u64,
-    #[serde(rename = "lastFactoryReset")]
+    #[serde(rename = "lastFactoryReset", deserialize_with = "de::i64_from_str_or_num")]
     pub last_factory_reset: i64,
     pub using: RouterUsing,
 }
@@ -224,9 +311,11 @@ pub struct Router {
 // /hosts
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct IPv6Address {
+    #[serde(deserialize_with = "de::string_from_any")]
     pub ipaddress: String,
+    #[serde(deserialize_with = "de::string_from_any")]
     pub status: String,
     #[serde(deserialize_with = "de::datetime")]
     pub lastseen: DateTime<FixedOffset>,
@@ -234,17 +323,21 @@ pub struct IPv6Address {
     pub lastscan: DateTime<FixedOffset>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct EthernetInfo {
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub physicalport: i64,
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub logicalport: i64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub speed: u64,
     #[serde(deserialize_with = "de::opt_string_empty_as_none")]
     pub mode: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct WirelessInfo {
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub wexindex: i64,
     #[serde(rename = "static", deserialize_with = "de::bool_from_int_or_bool")]
     pub static_: bool,
@@ -254,48 +347,55 @@ pub struct WirelessInfo {
         deserialize_with = "de::opt_f64_from_str_or_num_empty_as_none"
     )]
     pub band: Option<f64>,
-    #[serde(rename = "txUsage")]
+    #[serde(rename = "txUsage", deserialize_with = "de::u64_from_str_or_num")]
     pub tx_usage: u64,
-    #[serde(rename = "rxUsage")]
+    #[serde(rename = "rxUsage", deserialize_with = "de::u64_from_str_or_num")]
     pub rx_usage: u64,
-    #[serde(rename = "estimatedRate")]
+    #[serde(rename = "estimatedRate", deserialize_with = "de::u64_from_str_or_num")]
     pub estimated_rate: u64,
     /// RSSI signal strength. Arrives as integer or numeric string (e.g. `"-52"`).
     #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub rssi0: i64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub mcs: u64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub rate: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct WirelessByBand {
     /// Frequency band in GHz. Arrives as number or numeric string (e.g. `"2.4"`).
     #[serde(deserialize_with = "de::f64_from_str_or_num")]
     pub band: f64,
-    #[serde(rename = "txUsage")]
+    #[serde(rename = "txUsage", deserialize_with = "de::u64_from_str_or_num")]
     pub tx_usage: u64,
-    #[serde(rename = "rxUsage")]
+    #[serde(rename = "rxUsage", deserialize_with = "de::u64_from_str_or_num")]
     pub rx_usage: u64,
-    #[serde(rename = "estimatedRate")]
+    #[serde(rename = "estimatedRate", deserialize_with = "de::u64_from_str_or_num")]
     pub estimated_rate: u64,
     #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub rssi0: i64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub mcs: u64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub rate: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PlcInfo {
     #[serde(deserialize_with = "de::opt_string_empty_as_none")]
     pub rxphyrate: Option<String>,
     #[serde(deserialize_with = "de::opt_string_empty_as_none")]
     pub txphyrate: Option<String>,
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub associateddevice: i64,
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub interface: i64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub ethernetspeed: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct DeviceInformation {
     #[serde(rename = "type", deserialize_with = "de::clean_string")]
     pub device_type: String,
@@ -303,6 +403,7 @@ pub struct DeviceInformation {
     pub manufacturer: Option<String>,
     #[serde(deserialize_with = "de::opt_clean_string_empty_as_none")]
     pub model: Option<String>,
+    #[serde(deserialize_with = "de::string_from_any")]
     pub icon: String,
     #[serde(rename = "operatingSystem", deserialize_with = "de::opt_clean_string_empty_as_none")]
     pub operating_system: Option<String>,
@@ -310,60 +411,67 @@ pub struct DeviceInformation {
     pub version: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ParentalControl {
     #[serde(deserialize_with = "de::bool_from_int_or_bool")]
     pub enable: bool,
+    #[serde(deserialize_with = "de::string_from_any")]
     pub status: String,
-    #[serde(rename = "statusRemaining")]
+    #[serde(rename = "statusRemaining", deserialize_with = "de::u64_from_str_or_num")]
     pub status_remaining: u64,
     #[serde(rename = "statusUntil", deserialize_with = "de::opt_datetime_empty_as_none")]
     pub status_until: Option<DateTime<FixedOffset>>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct PingInfo {
     /// Average ping time in ms. Arrives as integer or float.
     pub average: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct ScanInfo {
     #[serde(default)]
     pub services: Vec<Value>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Host {
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub id: i64,
     #[serde(deserialize_with = "de::bool_from_int_or_bool")]
     pub active: bool,
     #[serde(deserialize_with = "de::opt_clean_string_empty_as_none")]
     pub hostname: Option<String>,
+    #[serde(deserialize_with = "de::string_from_any")]
     pub ipaddress: String,
+    #[serde(deserialize_with = "de::string_from_any")]
     pub macaddress: String,
-    #[serde(rename = "type")]
+    #[serde(rename = "type", deserialize_with = "de::string_from_any")]
     pub link_type: String,
+    #[serde(deserialize_with = "de::string_from_any")]
     pub link: String,
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub lease: i64,
     #[serde(deserialize_with = "de::datetime")]
     pub firstseen: DateTime<FixedOffset>,
+    #[serde(deserialize_with = "de::i64_from_str_or_num")]
     pub lastseen: i64,
-    #[serde(deserialize_with = "de::opt_string_empty_as_none")]
+    #[serde(deserialize_with = "de::opt_string_from_any")]
     pub devicetype: Option<String>,
-    #[serde(deserialize_with = "de::opt_string_empty_as_none")]
+    #[serde(deserialize_with = "de::opt_string_from_any")]
     pub duid: Option<String>,
     #[serde(default = "de::default_false", deserialize_with = "de::bool_from_int_or_bool")]
     pub guest: bool,
-    #[serde(rename = "serialNumber", deserialize_with = "de::opt_string_empty_as_none")]
+    #[serde(rename = "serialNumber", deserialize_with = "de::opt_string_from_any")]
     pub serial_number: Option<String>,
-    #[serde(default, rename = "ip6address")]
+    #[serde(default, rename = "ip6address", deserialize_with = "de::vec_null_as_empty")]
     pub ip6address: Vec<IPv6Address>,
     #[serde(default)]
     pub ethernet: Option<EthernetInfo>,
     #[serde(default)]
     pub wireless: Option<WirelessInfo>,
-    #[serde(default, rename = "wirelessByBand")]
+    #[serde(default, rename = "wirelessByBand", deserialize_with = "de::vec_null_as_empty")]
     pub wireless_by_band: Vec<WirelessByBand>,
     #[serde(default)]
     pub plc: Option<PlcInfo>,
@@ -383,22 +491,28 @@ pub struct Host {
 // /wan/ip/stats
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct WanStats {
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub packets: u64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub bytes: u64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub packetserrors: u64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub packetsdiscards: u64,
     /// Bandwidth occupation percentage (0–100).
-    pub occupation: u8,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
+    pub occupation: u64,
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
     pub bandwidth: u64,
-    #[serde(rename = "maxBandwidth")]
+    #[serde(rename = "maxBandwidth", deserialize_with = "de::u64_from_str_or_num")]
     pub max_bandwidth: u64,
-    #[serde(rename = "contractualBandwidth")]
+    #[serde(rename = "contractualBandwidth", deserialize_with = "de::u64_from_str_or_num")]
     pub contractual_bandwidth: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct WanIpStats {
     pub rx: WanStats,
     pub tx: WanStats,
