@@ -1,0 +1,97 @@
+# ============================================================
+# Template sensors and binary sensors derived from sensor.bbox_router
+# ============================================================
+#
+# Add to configuration.yaml:
+#   template: !include bbox_template_sensors.yaml
+# or paste into an existing template: block.
+# ============================================================
+
+# ------------------------------------------------------------------
+# WAN bandwidth sensors
+# ------------------------------------------------------------------
+- sensor:
+    - name: "Bbox WAN Download"
+      unique_id: bbox_wan_rx_kbps
+      state: "{{ state_attr('sensor.bbox_router', 'wan_rx_kbps') | int(0) }}"
+      unit_of_measurement: "kbps"
+      device_class: data_rate
+      state_class: measurement
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+    - name: "Bbox WAN Upload"
+      unique_id: bbox_wan_tx_kbps
+      state: "{{ state_attr('sensor.bbox_router', 'wan_tx_kbps') | int(0) }}"
+      unit_of_measurement: "kbps"
+      device_class: data_rate
+      state_class: measurement
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+    - name: "Bbox WAN Download Usage"
+      unique_id: bbox_wan_rx_pct
+      state: "{{ state_attr('sensor.bbox_router', 'wan_rx_pct') | int(0) }}"
+      unit_of_measurement: "%"
+      state_class: measurement
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+    - name: "Bbox WAN Upload Usage"
+      unique_id: bbox_wan_tx_pct
+      state: "{{ state_attr('sensor.bbox_router', 'wan_tx_pct') | int(0) }}"
+      unit_of_measurement: "%"
+      state_class: measurement
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+# ------------------------------------------------------------------
+# Device count sensors
+# ------------------------------------------------------------------
+    - name: "Bbox Active Devices"
+      unique_id: bbox_active_devices
+      state: "{{ state_attr('sensor.bbox_router', 'active_devices') | int(0) }}"
+      unit_of_measurement: "devices"
+      state_class: measurement
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+    - name: "Bbox Total Devices"
+      unique_id: bbox_total_devices
+      state: "{{ state_attr('sensor.bbox_router', 'total_devices') | int(0) }}"
+      unit_of_measurement: "devices"
+      state_class: measurement
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+# ------------------------------------------------------------------
+# Router uptime sensor
+# ------------------------------------------------------------------
+    - name: "Bbox Uptime"
+      unique_id: bbox_uptime_s
+      state: "{{ state_attr('sensor.bbox_router', 'uptime_s') | int(0) }}"
+      unit_of_measurement: "s"
+      device_class: duration
+      state_class: measurement
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+# ------------------------------------------------------------------
+# Presence detection binary sensors
+# Replace the MAC addresses and names below with your own devices.
+#
+# Tips:
+#   - Use the text output (bbox without flags) to find MAC addresses.
+#   - Randomised MACs (most modern phones on Wi-Fi) will show as
+#     unknown vendor and change over time — use a static DHCP lease
+#     or disable MAC randomisation on the device for reliable tracking.
+# ------------------------------------------------------------------
+- binary_sensor:
+    - name: "My Phone Home"
+      unique_id: presence_my_phone
+      state: >
+        {{ 'aa:bb:cc:dd:ee:ff' in
+           (state_attr('sensor.bbox_router', 'active_macs') | default([])) }}
+      device_class: presence
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"
+
+    - name: "My Laptop Home"
+      unique_id: presence_my_laptop
+      state: >
+        {{ '11:22:33:44:55:66' in
+           (state_attr('sensor.bbox_router', 'active_macs') | default([])) }}
+      device_class: presence
+      availability: "{{ states('sensor.bbox_router') == 'online' }}"

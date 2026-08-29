@@ -1,0 +1,41 @@
+# ============================================================
+# Bbox router integration for Home Assistant
+# ============================================================
+#
+# Setup
+# -----
+# 1. Copy bbox-ha.sh to somewhere HA can execute it (e.g. /config/scripts/).
+#    Fill in BBOX_PASSWORD and the path to the bbox binary, then:
+#      chmod +x /config/scripts/bbox-ha.sh
+#
+# 2. In configuration.yaml add:
+#      command_line: !include bbox.yaml
+#    or paste the contents below into your existing command_line block.
+#
+# 3. Restart Home Assistant.
+# ============================================================
+
+# ------------------------------------------------------------------
+# Primary sensor — runs the binary once per scan interval.
+# All metrics are stored as attributes; template sensors expose
+# them individually with proper units and device classes.
+# ------------------------------------------------------------------
+- sensor:
+    name: Bbox Router
+    unique_id: bbox_router
+    command: "/config/scripts/bbox-ha.sh"
+    scan_interval: 60          # seconds — don't go below ~30
+    command_timeout: 25        # abort if the router is unreachable
+    value_template: "{{ value_json.state }}"
+    json_attributes:
+      - uptime_s
+      - wan_rx_kbps
+      - wan_tx_kbps
+      - wan_rx_pct
+      - wan_tx_pct
+      - wan_rx_max_kbps
+      - wan_tx_max_kbps
+      - active_devices
+      - total_devices
+      - active_macs
+    availability: "{{ value_json.state is defined }}"
