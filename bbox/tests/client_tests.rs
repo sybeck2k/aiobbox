@@ -276,6 +276,32 @@ async fn test_get_wan_ip_stats() {
 }
 
 #[tokio::test]
+async fn test_get_device_power() {
+    use bbox::models::PowerPeriod;
+
+    let server = MockServer::start().await;
+    let mut api = authenticated_client(&server).await;
+
+    Mock::given(method("GET"))
+        .and(path("/api/v1/graphs/device/power/week"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "type": 0,
+            "rate": 900,
+            "data": [[900, 14679], [900, 14760], [900, 14863]],
+            "last": 5400
+        })))
+        .mount(&server)
+        .await;
+
+    let graph = api.get_device_power(PowerPeriod::Week).await.unwrap();
+    assert_eq!(graph.rate, 900);
+    assert_eq!(graph.last, 5400);
+    assert_eq!(graph.samples.len(), 3);
+    assert_eq!(graph.samples[0].interval_s, 900);
+    assert_eq!(graph.latest().unwrap().value, 14863);
+}
+
+#[tokio::test]
 async fn test_session_expired() {
     let server = MockServer::start().await;
     let mut api = authenticated_client(&server).await;

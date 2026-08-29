@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use clap::Parser;
 use serde::Serialize;
 
-use bbox::models::{Host, Router, WanIpStats};
+use bbox::models::{Host, PowerGraph, PowerPeriod, Router, WanIpStats};
 use bbox::BboxApi;
 
 #[derive(Parser)]
@@ -15,7 +15,8 @@ struct Args {
 
     /// Output a flat JSON payload designed for Home Assistant command_line sensors.
     /// Fields: state, uptime_s, wan_rx_kbps, wan_tx_kbps, wan_rx_pct, wan_tx_pct,
-    /// wan_rx_max_kbps, wan_tx_max_kbps, active_devices, total_devices, active_macs.
+    /// wan_rx_max_kbps, wan_tx_max_kbps, active_devices, total_devices, active_macs,
+    /// power_w.
     #[arg(long)]
     ha_json: bool,
 }
@@ -72,6 +73,11 @@ struct HaOutput {
     total_devices: usize,
     /// MAC addresses of currently active devices (use for presence detection).
     active_macs: Vec<String>,
+    /// Latest instantaneous router power draw in watts, from the
+    /// `graphs/device/power/day` graph. `null` if that endpoint was
+    /// unavailable. The source value's unit is undocumented; it is assumed to
+    /// be milliwatts and divided by 1000 here.
+    power_w: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------
@@ -90,6 +96,7 @@ struct JsonOutput<'a> {
     router: &'a Router,
     hosts: Vec<HostWithVendor<'a>>,
     wan_ip_stats: &'a WanIpStats,
+    device_power: Option<&'a PowerGraph>,
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +121,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let router = api.get_router_info().await?;
     let hosts = api.get_hosts().await?;
     let wan = api.get_wan_ip_stats().await?;
+    // Non-fatal: this endpoint is newer and may be absent on some firmware.
+    // A failure here must not take the other sensors offline.
+    let power = match api.get_device_power(PowerPeriod::Day).await {
+        Ok(graph) => Some(graph),
+        Err(e) => {
+            eprintln!("Warning: could not fetch device power graph: {e}");
+            None
+        }
+    };
+    let power_w = power
+        .as_ref()
+        .and_then(PowerGraph::latest)
+        .map(|s| s.value as f64 / 1000.0);
 
     // Initialise the embedded OUI database. With the `with-db` feature the
     // database is bundled in the binary, so this never touches the network.
@@ -135,6 +155,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             active_devices: active.len(),
             total_devices: hosts.len(),
             active_macs: active.iter().map(|h| h.macaddress.clone()).collect(),
+            power_w,
         };
         println!("{}", serde_json::to_string(&output)?);
     } else if args.json {
@@ -150,6 +171,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             router: &router,
             hosts: hosts_with_vendor,
             wan_ip_stats: &wan,
+            device_power: power.as_ref(),
         };
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
@@ -176,6 +198,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         println!("\n=== WAN IP Stats ===");
         println!("  RX bandwidth:   {} kbps  ({}% used)", wan.rx.bandwidth, wan.rx.occupation);
         println!("  TX bandwidth:   {} kbps  ({}% used)", wan.tx.bandwidth, wan.tx.occupation);
+
+        println!("\n=== Power ===");
+        match power_w {
+            Some(w) => println!("  Draw:   {w:.2} W (assumed unit: mW)"),
+            None => println!("  Draw:   unavailable"),
+        }
     }
 
     Ok(())

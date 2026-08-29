@@ -5,7 +5,7 @@ use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
 use crate::error::{BboxError, Result};
-use crate::models::{Host, Router, WanIpStats};
+use crate::models::{Host, PowerGraph, PowerPeriod, Router, WanIpStats};
 
 /// Async Rust API client for Bouygues Telecom Bbox routers.
 ///
@@ -248,5 +248,19 @@ impl BboxApi {
         debug!("Fetching WAN IP stats");
         let data = self.request("wan/ip/stats").await?;
         serde_json::from_value(data["wan"]["ip"]["stats"].clone()).map_err(BboxError::Json)
+    }
+
+    /// Retrieve the device power-consumption graph
+    /// (`GET /graphs/device/power/{period}`).
+    ///
+    /// Returns a time series of instantaneous power readings, oldest first.
+    /// The values reset to a low baseline when the router reboots. Only `day`
+    /// and `week` windows are supported by the API.
+    pub async fn get_device_power(&mut self, period: PowerPeriod) -> Result<PowerGraph> {
+        debug!(period = period.as_str(), "Fetching device power graph");
+        let data = self
+            .request(&format!("graphs/device/power/{}", period.as_str()))
+            .await?;
+        serde_json::from_value(data).map_err(BboxError::Json)
     }
 }

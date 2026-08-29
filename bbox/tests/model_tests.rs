@@ -1,4 +1,4 @@
-use bbox::models::{Host, Router, WanIpStats, WanStats};
+use bbox::models::{Host, PowerGraph, PowerPeriod, Router, WanIpStats, WanStats};
 use serde_json::json;
 
 // ---------------------------------------------------------------------------
@@ -366,4 +366,40 @@ fn test_wan_stats_missing_field() {
     // Missing most fields – should fail.
     let data = json!({ "packets": 1000, "occupation": 50 });
     assert!(serde_json::from_value::<WanStats>(data).is_err());
+}
+
+// ---------------------------------------------------------------------------
+// PowerGraph
+// ---------------------------------------------------------------------------
+
+#[test]
+fn test_power_graph_parses_pairs() {
+    let data = json!({
+        "type": 0,
+        "rate": 120,
+        "data": [[600, 14624], [120, 14680], [120, 14863]],
+        "last": 5400
+    });
+    let graph: PowerGraph = serde_json::from_value(data).unwrap();
+    assert_eq!(graph.graph_type, 0);
+    assert_eq!(graph.rate, 120);
+    assert_eq!(graph.last, 5400);
+    assert_eq!(graph.samples.len(), 3);
+    assert_eq!(graph.samples[0].interval_s, 600);
+    assert_eq!(graph.samples[0].value, 14624);
+    assert_eq!(graph.latest().unwrap().value, 14863);
+}
+
+#[test]
+fn test_power_graph_empty_data() {
+    let data = json!({ "type": 0, "rate": 900, "data": [], "last": 0 });
+    let graph: PowerGraph = serde_json::from_value(data).unwrap();
+    assert!(graph.samples.is_empty());
+    assert!(graph.latest().is_none());
+}
+
+#[test]
+fn test_power_period_as_str() {
+    assert_eq!(PowerPeriod::Day.as_str(), "day");
+    assert_eq!(PowerPeriod::Week.as_str(), "week");
 }

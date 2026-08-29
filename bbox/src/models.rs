@@ -218,6 +218,18 @@ mod de {
             .map_err(serde::de::Error::custom)
     }
 
+    /// Deserialize the power graph's `data` array of `[interval_seconds, value]`
+    /// pairs into named [`PowerSample`](super::PowerSample) structs.
+    pub fn power_samples<'de, D: Deserializer<'de>>(
+        d: D,
+    ) -> Result<Vec<super::PowerSample>, D::Error> {
+        let raw: Vec<(u64, i64)> = Vec::deserialize(d)?;
+        Ok(raw
+            .into_iter()
+            .map(|(interval_s, value)| super::PowerSample { interval_s, value })
+            .collect())
+    }
+
     /// Deserialize an optional `DateTime<FixedOffset>`, treating null and empty
     /// strings as `None`.
     pub fn opt_datetime_empty_as_none<'de, D: Deserializer<'de>>(
@@ -516,4 +528,67 @@ pub struct WanStats {
 pub struct WanIpStats {
     pub rx: WanStats,
     pub tx: WanStats,
+}
+
+// ---------------------------------------------------------------------------
+// /graphs/device/power/{period}
+// ---------------------------------------------------------------------------
+
+/// Time window for the device power graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PowerPeriod {
+    /// ~2-minute resolution over the last hours.
+    Day,
+    /// ~15-minute resolution over the last days.
+    Week,
+}
+
+impl PowerPeriod {
+    /// Path segment used by the API (`day` / `week`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PowerPeriod::Day => "day",
+            PowerPeriod::Week => "week",
+        }
+    }
+}
+
+/// A single point of the device power graph.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PowerSample {
+    /// Seconds represented by this sample — the graph's nominal `rate`, except
+    /// the first point which may cover a longer span.
+    pub interval_s: u64,
+    /// Instantaneous power draw reported by the router. The API does not
+    /// document a unit; observed values (~14000–15000) are consistent with
+    /// **milliwatts** (~14–15 W). Treat the unit as unverified.
+    pub value: i64,
+}
+
+/// Response of `GET /graphs/device/power/{period}`.
+///
+/// The raw API returns `{"type", "rate", "data": [[interval, value], …], "last"}`
+/// with `data` oldest-first. Values drop back to a low baseline when the router
+/// reboots.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct PowerGraph {
+    /// Graph type discriminator (observed: `0`).
+    #[serde(rename = "type", deserialize_with = "de::i64_from_str_or_num")]
+    pub graph_type: i64,
+    /// Nominal seconds between samples (~120 for `day`, ~900 for `week`).
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
+    pub rate: u64,
+    /// Total seconds of history covered by `samples`.
+    #[serde(deserialize_with = "de::u64_from_str_or_num")]
+    pub last: u64,
+    /// Samples, oldest first.
+    #[serde(rename = "data", deserialize_with = "de::power_samples")]
+    pub samples: Vec<PowerSample>,
+}
+
+impl PowerGraph {
+    /// Most recent sample, if the series is non-empty.
+    pub fn latest(&self) -> Option<&PowerSample> {
+        self.samples.last()
+    }
 }

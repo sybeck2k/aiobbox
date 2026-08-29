@@ -30,6 +30,6 @@ pub use client::BboxApi;
 pub use error::{BboxError, Result};
 pub use models::{
     DeviceInformation, EthernetInfo, Host, IPv6Address, ParentalControl, PingInfo, PlcInfo,
-    Router, RouterDisplay, RouterUsing, RouterVersion, ScanInfo, WanIpStats, WanStats,
-    WirelessByBand, WirelessInfo,
+    PowerGraph, PowerPeriod, PowerSample, Router, RouterDisplay, RouterUsing, RouterVersion,
+    ScanInfo, WanIpStats, WanStats, WirelessByBand, WirelessInfo,
 };
